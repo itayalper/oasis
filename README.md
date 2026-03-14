@@ -163,15 +163,150 @@ oasis/
 │   │   │   ├── schemas/          # AJV validation schemas
 │   │   │   └── utils/            # crypto helpers
 │   │   └── migrations/sqls/      # db-migrate SQL files
-│   └── frontend/         # React 18 + Vite + React Router v6
-│       └── src/
-│           ├── pages/
-│           ├── components/
-│           ├── hooks/
-│           └── api/
+│   ├── frontend/         # React 18 + Vite + React Router v6
+│   │   └── src/
+│   │       ├── pages/
+│   │       ├── components/
+│   │       ├── hooks/
+│   │       └── api/
+│   └── automation/       # NHI Blog Digest cron script
+│       ├── src/
+│       │   ├── digest.ts         # entry point / orchestrator
+│       │   ├── blog-fetcher.ts   # scrape oasis.security/blog
+│       │   ├── summariser.ts     # Claude AI summary
+│       │   ├── ticket-creator.ts # POST /api/v1/tickets
+│       │   └── db.ts             # blog_digests DAL
+│       └── cron.env              # env file (gitignored)
 ├── docker-compose.yml
-├── .env.example
+├── .env
 └── package.json          # yarn workspace root
+```
+
+---
+
+## NHI Blog Digest (Automation)
+
+A standalone cron script that monitors the [Oasis Security blog](https://www.oasis.security/blog),
+generates an AI-powered summary of the most recent post using Claude, and automatically files a
+Jira ticket via the existing external API. Each processed post is tracked in the `blog_digests`
+table so duplicates are never created.
+
+### Prerequisites
+
+In addition to the main stack prerequisites:
+
+- An **Anthropic API key** — obtain from [console.anthropic.com](https://console.anthropic.com)
+- A **Digest API key** — generate one from the app UI under **Settings → API Keys**
+- The backend must be running and reachable at `DIGEST_BACKEND_URL`
+
+### 1. Set up `cron.env`
+
+```bash
+cp packages/automation/cron.env packages/automation/cron.env
+# (the file is already created — just fill in the values)
+```
+
+Edit `packages/automation/cron.env`:
+
+```
+# Copy from your root .env
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/oasis
+JIRA_ENCRYPTION_KEY=<copy from .env>
+
+# New values
+ANTHROPIC_API_KEY=<your Anthropic API key>
+DIGEST_BACKEND_URL=http://localhost:3001
+DIGEST_API_KEY=<raw API key from the UI>
+DIGEST_JIRA_PROJECT=<Jira project key, e.g. SEC>
+```
+
+> `cron.env` is gitignored and never committed.
+
+### 2. Install dependencies
+
+```bash
+yarn install   # from the repo root — picks up the new automation workspace
+```
+
+### 3. Run manually
+
+```bash
+yarn workspace automation digest
+```
+
+Expected output for a new post:
+
+```
+[digest] Starting NHI Blog Digest run…
+[digest] Fetching latest post from oasis.security/blog…
+[digest] Found: "Inside Oasis's NHI Enrichment Layer…" — https://www.oasis.security/blog/…
+[digest] Inserted blog_digests row <uuid> (status: pending)
+[digest] Generating AI summary via Claude…
+[digest] Summary generated (severity: LOW, priority: Low)
+[digest] Creating Jira ticket…
+[digest] Done. Ticket created: SEC-42 — https://…/browse/SEC-42
+```
+
+If the latest post was already processed:
+
+```
+[digest] Already processed (status: ticketed) — skipping.
+```
+
+### 4. Monitor processing status
+
+Query the `blog_digests` table directly:
+
+```sql
+SELECT post_title, status, jira_issue_key, jira_url, error_msg, created_at
+FROM blog_digests
+ORDER BY created_at DESC;
+```
+
+| status | meaning |
+|--------|---------|
+| `pending` | Fetched; summary not yet generated |
+| `summarised` | Claude summary done; ticket not yet created |
+| `ticketed` | Jira ticket created successfully |
+| `failed` | An error occurred — see `error_msg` column |
+
+### 5. Schedule with system cron
+
+Run daily at 08:00:
+
+```cron
+0 8 * * * cd /path/to/oasis && yarn workspace automation digest >> /var/log/nhi-digest.log 2>&1
+```
+
+### 6. Schedule with GitHub Actions
+
+Create `.github/workflows/nhi-digest.yml`:
+
+```yaml
+name: NHI Blog Digest
+
+on:
+  schedule:
+    - cron: '0 8 * * *'   # daily at 08:00 UTC
+  workflow_dispatch:        # allow manual trigger
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: yarn install --frozen-lockfile
+      - run: yarn workspace automation digest
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          JIRA_ENCRYPTION_KEY: ${{ secrets.JIRA_ENCRYPTION_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DIGEST_BACKEND_URL: ${{ secrets.DIGEST_BACKEND_URL }}
+          DIGEST_API_KEY: ${{ secrets.DIGEST_API_KEY }}
+          DIGEST_JIRA_PROJECT: ${{ secrets.DIGEST_JIRA_PROJECT }}
 ```
 
 ---
