@@ -1,0 +1,14 @@
+{
+  "dev": {
+    "driver": "pg",
+    "connectionString": { "ENV": "DATABASE_URL" }
+  },
+  "production": {
+    "driver": "pg",
+    "connectionString": { "ENV": "DATABASE_URL" }
+  },
+  "test": {
+    "driver": "pg",
+    "connectionString": { "ENV": "DATABASE_URL" }
+  }
+}

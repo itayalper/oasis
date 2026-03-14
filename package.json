@@ -1,0 +1,12 @@
+{
+  "name": "oasis",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "dev": "concurrently \"yarn workspace backend dev\" \"yarn workspace frontend dev\"",
+    "build": "yarn workspace backend build && yarn workspace frontend build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
